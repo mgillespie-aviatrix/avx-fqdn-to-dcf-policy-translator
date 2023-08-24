@@ -3,3 +3,4 @@ test_files/*
 input/*
 .vscode
 debug/*
+.DS_Store
