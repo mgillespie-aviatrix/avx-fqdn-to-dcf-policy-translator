@@ -3,8 +3,8 @@
 ## Export Legacy Policy Bundle
 This should be run against the controller and will export a ZIP file.
 ```
-❯ python3 export_legacy_policy_bundle.py --help
-usage: export_legacy_policy_bundle.py [-h] -i CONTROLLER_IP -u USERNAME [-p PASSWORD] [-o OUTPUT]
+❯ python3 export_legacy_policy_bundle.py --help                                                     
+usage: export_legacy_policy_bundle.py [-h] -i CONTROLLER_IP -u USERNAME [-p PASSWORD] [-o OUTPUT] [-w]
 
 Collects Controller IP, username, and password.
 
@@ -18,6 +18,7 @@ options:
                         Password
   -o OUTPUT, --output OUTPUT
                         Output file name
+  -w, --any_web         Download the Any Webgroup ID. Controller version must be v7.1 or greater
 ```
 
 ## Translator
