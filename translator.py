@@ -5,6 +5,7 @@ import logging
 import pandas as pd
 import ipaddress
 import argparse
+import numpy as np
 
 
 # TODO
@@ -104,20 +105,25 @@ def remove_policy_duplicates(fw_policy_df):
 # Merge all created smartgroups and return an aggregate dataframe
 def build_smartgroup_df(fw_policy_df, fw_tag_df, gateways_df):
     smartgroup_df = pd.DataFrame()
+    sg_dfs = []
     # process fw tags
-    fw_tag_df['selector'] = fw_tag_df['cidr_list'].apply(
-        translate_fw_tag_to_sg_selector)
-    fw_tag_df = fw_tag_df.rename(columns={'firewall_tag': 'name'})
-    fw_tag_df = fw_tag_df[['name', 'selector']]
+    if len(fw_tag_df)>0:
+        fw_tag_df['selector'] = fw_tag_df['cidr_list'].apply(
+            translate_fw_tag_to_sg_selector)
+        fw_tag_df = fw_tag_df.rename(columns={'firewall_tag': 'name'})
+        fw_tag_df = fw_tag_df[['name', 'selector']]
+        sg_dfs.append(fw_tag_df)
     # process fw policy cidrs
-    cidrs = pd.concat(
-        [fw_policy_df['src_ip'], fw_policy_df['dst_ip']]).unique()
-    cidrs = set(cidrs) - set(fw_tag_df['name'])
-    cidr_sgs = []
-    for cidr in cidrs:
-        cidr_sgs.append(
-            {'selector': {'match_expressions': {'cidr': cidr}}, 'name': "cidr_" + cidr})
-    cidr_sg_df = pd.DataFrame(cidr_sgs)
+    if len(fw_policy_df)>0:
+        cidrs = pd.concat(
+            [fw_policy_df['src_ip'], fw_policy_df['dst_ip']]).unique()
+        cidrs = set(cidrs) - set(fw_tag_df['name'])
+        cidr_sgs = []
+        for cidr in cidrs:
+            cidr_sgs.append(
+                {'selector': {'match_expressions': {'cidr': cidr}}, 'name': "cidr_" + cidr})
+        cidr_sg_df = pd.DataFrame(cidr_sgs)
+        sg_dfs.append(cidr_sg_df)
     # process VPC SmartGroups
     vpcs = gateways_df.drop_duplicates(subset=['vpc_id', 'vpc_region', 'account_name']).copy()
     vpcs['vpc_name_attr'] = vpcs['vpc_id'].str.split('~~').str[1]
@@ -128,8 +134,9 @@ def build_smartgroup_df(fw_policy_df, fw_tag_df, gateways_df):
     vpcs = vpcs.rename(columns={'vpc_id': 'name'})
     # clean
     vpcs = vpcs[['name', 'selector']]
+    sg_dfs.append(vpcs)
     # merge all smartgroup dataframes
-    smartgroups = pd.concat([vpcs, cidr_sg_df, fw_tag_df])
+    smartgroups = pd.concat(sg_dfs)
     # clean invalid characters
     smartgroups = remove_invalid_name_chars(smartgroups, 'name')
     smartgroups.to_csv('{}/smartgroups.csv'.format(output_path))
@@ -331,7 +338,11 @@ def build_catch_all_policies(gateways_df,firewall_df):
     # Remove HAGWs
     gateways_df = gateways_df[gateways_df['is_hagw']=="no"]
     # Enrich gateway details with FW default policy
-    vpcs_and_fw = gateways_df.merge(firewall_df, left_on="vpc_name", right_on="gw_name", how="left")
+    if len(firewall_df)>0:
+        vpcs_and_fw = gateways_df.merge(firewall_df, left_on="vpc_name", right_on="gw_name", how="left")
+    else:
+        vpcs_and_fw = gateways_df.copy()
+        vpcs_and_fw['base_policy'] = np.nan
     # Sort by VPCs with known policies, then remove duplicate VPCs (could be caused by having spokes and standalones or multiple standalones)
     vpcs_and_fw = vpcs_and_fw.sort_values(['base_policy']).drop_duplicates(subset = ['vpc_id'],keep='first')
     # Fill blank base policies with unknown for further processing
@@ -420,8 +431,11 @@ def create_dataframe(tf_resource, resource_name):
 def load_tf_resource(resource_name):
     with open('{}/{}.tf'.format(config_path, resource_name), 'r') as fp:
         resource_dict = hcl.load(fp)
-        resource_dict = resource_dict["resource"]['aviatrix_{}'.format(
-            resource_name)]
+        if "resource" in resource_dict.keys():
+            resource_dict = resource_dict["resource"]['aviatrix_{}'.format(
+                resource_name)]
+        else:
+            resource_dict = {}
         resource_df = create_dataframe(resource_dict, resource_name)
         logging.info("Number of {}: {}".format(
             resource_name, len(resource_df)))
@@ -470,25 +484,27 @@ def main():
         # logging.info(gateways_df)
 
     # Evaluate and clean existing L4 policies.  Generate warnings for unsupported policies.
-    stateless_alerts = eval_stateless_alerts(fw_policy_df)
-    fw_tag_df = eval_unused_fw_tags(fw_policy_df, fw_tag_df)
-    fw_policy_df = eval_single_cidr_tag_match(fw_policy_df, fw_tag_df)
-    fw_policy_df = remove_policy_duplicates(fw_policy_df)
-    if LOGLEVEL == "DEBUG":
-        fw_policy_df.to_csv('{}/clean_policies.csv'.format(debug_path))
+    if len(fw_policy_df)>0:
+        stateless_alerts = eval_stateless_alerts(fw_policy_df)
+        fw_tag_df = eval_unused_fw_tags(fw_policy_df, fw_tag_df)
+        fw_policy_df = eval_single_cidr_tag_match(fw_policy_df, fw_tag_df)
+        fw_policy_df = remove_policy_duplicates(fw_policy_df)
+        if LOGLEVEL == "DEBUG":
+            fw_policy_df.to_csv('{}/clean_policies.csv'.format(debug_path))
 
     # Create Smartgroups
     smartgroups_df = build_smartgroup_df(fw_policy_df, fw_tag_df, gateways_df)
     export_dataframe_to_tf(smartgroups_df, 'aviatrix_smart_group', 'name')
 
     # Create L4 policies (not including catch-all)
-    l4_dcf_policies_df = build_l4_dcf_policies(fw_policy_df)
-    l4_dcf_policies_df['web_groups'] = None
-    l4_policies_dict = l4_dcf_policies_df.to_dict(orient='records')
-    l4_policies_dict = {'resource': {'aviatrix_distributed_firewalling_policy_list': {
-        'distributed_firewalling_policy_list_1': {'policies': l4_policies_dict}}}}
-    with open('{}/aviatrix_distributed_firewalling_policy_list.tf.json'.format(output_path), 'w') as json_file:
-        json.dump(l4_policies_dict, json_file, indent=1)
+    if len(fw_policy_df)>0:
+        l4_dcf_policies_df = build_l4_dcf_policies(fw_policy_df)
+        l4_dcf_policies_df['web_groups'] = None
+        l4_policies_dict = l4_dcf_policies_df.to_dict(orient='records')
+        l4_policies_dict = {'resource': {'aviatrix_distributed_firewalling_policy_list': {
+            'distributed_firewalling_policy_list_1': {'policies': l4_policies_dict}}}}
+        with open('{}/aviatrix_distributed_firewalling_policy_list.tf.json'.format(output_path), 'w') as json_file:
+            json.dump(l4_policies_dict, json_file, indent=1)
 
     # Create Webgroups
     fqdn_tag_rule_df = eval_unsupported_webgroups(fqdn_tag_rule_df,fqdn_df)
@@ -504,7 +520,10 @@ def main():
     catch_all_rules_df = build_catch_all_policies(gateways_df, fw_gw_df)
 
     # Merge all policies and create final policy list
-    full_policy_list = pd.concat([l4_dcf_policies_df, internet_rules_df,catch_all_rules_df])
+    if len(fw_policy_df)>0:
+        full_policy_list = pd.concat([l4_dcf_policies_df, internet_rules_df,catch_all_rules_df])
+    else:
+        full_policy_list = pd.concat([internet_rules_df,catch_all_rules_df])
     full_policy_list['exclude_sg_orchestration'] = True
     full_policy_dict = full_policy_list.to_dict(orient='records')
     full_policy_dict = {'resource': {'aviatrix_distributed_firewalling_policy_list': {
