@@ -152,7 +152,6 @@ def remove_invalid_name_chars(df, column):
     return df
 
 # - [x] Create CIDR SmartGroups for each of the stateful firewall tags - named as the name of the tag
-
 def translate_fw_tag_to_sg_selector(tag_cidrs):
     if isinstance(tag_cidrs, dict):
         match_expressions = {'cidr': tag_cidrs['cidr']}
@@ -530,6 +529,22 @@ def main():
         'distributed_firewalling_policy_list_1': {'policies': full_policy_dict}}}}
     with open('{}/aviatrix_distributed_firewalling_policy_list.tf.json'.format(output_path), 'w') as json_file:
         json.dump(full_policy_dict, json_file, indent=1)
+
+    ## Create main.tf
+    main_tf = '''terraform {
+  required_providers {
+    aviatrix = {
+      source  = "AviatrixSystems/aviatrix"
+      version = ">=3.1"
+    }
+  }
+}
+
+provider "aviatrix" {
+  skip_version_validation = true
+}'''
+    with open('{}/main.tf'.format(output_path), 'w') as f:
+        f.write(main_tf)
 
     # Show final policy counts
     logging.info("Number of SmartGroups: {}".format(len(smartgroups_df)))
