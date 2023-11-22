@@ -320,7 +320,7 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     egress_vpcs_with_discovery = egress_vpcs[(
         egress_vpcs['fqdn_tags'].astype(str).str.contains('-discovery'))]
     discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
-                                           'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${{aviatrix_web_group.any-domain.id}}']}])
+                                           'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${aviatrix_web_group.any-domain.id}']}])
     discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
                                            'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Discovery-L4', 'port_ranges':None, 'web_groups': None}])
     # Merge policies together
