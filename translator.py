@@ -14,14 +14,12 @@ import numpy as np
 # [] Add Webgroup policies in monitor mode for tags that are assigned but disabled
 # [] Add additional port/proto combos for unsupported webgroups in `eval_unsupported_webgroups`
 # [] Match logging policy for legacy L4
-# [] Create argparse for options
 # [] Evaluate scenarios where an L4 stateful FW policy might be defined as relative to the VPC CIDR.  For example, a src 0.0.0.0/0 may need to be translated to the VPC CIDR due to it's relativity.
 
 # LOGLEVEL = 'WARNING'
 # logging.basicConfig(level=LOGLEVEL)
 # internet_sg_id = "def000ad-0000-0000-0000-000000000001"
 # anywhere_sg_id = "def000ad-0000-0000-0000-000000000000"
-# any_webgroup_id = "74be8926-c68d-4713-8b00-4636762d1aa1"
 # # could add range delimited by : eg. 80:81
 # default_web_port_ranges = ["80", "443"]
 # global_catch_all_action = "PERMIT"
@@ -35,7 +33,6 @@ def get_arguments():
     parser.add_argument('--loglevel', default="WARNING", choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], help="Set the logging level.")
     parser.add_argument('--internet-sg-id', default="def000ad-0000-0000-0000-000000000001", help="Internet security group ID.")
     parser.add_argument('--anywhere-sg-id', default="def000ad-0000-0000-0000-000000000000", help="Anywhere security group ID.")
-    parser.add_argument('--any-webgroup-id', help="Any webgroup ID.", required=True)
     parser.add_argument('--default-web-port-ranges', nargs='+', default=["80", "443"], help="Default web port ranges. Can provide multiple, space separated. Can provide a range by comma-delimiting.")
     parser.add_argument('--global-catch-all-action', default='PERMIT', choices=['PERMIT', 'DENY'], help="Global catch all action. Choices are 'PERMIT' or 'DENY'.")
     parser.add_argument('--config-path', default='./input', help="Path to the configuration files.")
@@ -185,6 +182,8 @@ def build_webgroup_df(fqdn_tag_rule_df):
         lambda row: "{}_{}_{}".format(row['fqdn_tag_name'], row['protocol'], row['port']), axis=1)
     fqdn_tag_rule_df['selector'] = fqdn_tag_rule_df['fqdn'].apply(
         translate_fqdn_tag_to_sg_selector)
+    # add any-domain webgroup for discovery
+    fqdn_tag_rule_df = fqdn_tag_rule_df.append({'name': 'any-domain', 'protocol':'tcp','port':'443','selector': {'match_expressions': {'snifilter': '*.*'}}}, ignore_index=True)
     return fqdn_tag_rule_df
 
 
@@ -321,7 +320,7 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     egress_vpcs_with_discovery = egress_vpcs[(
         egress_vpcs['fqdn_tags'].astype(str).str.contains('-discovery'))]
     discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
-                                           'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': [any_webgroup_id]}])
+                                           'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${{aviatrix_web_group.any-domain.id}}']}])
     discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
                                            'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Discovery-L4', 'port_ranges':None, 'web_groups': None}])
     # Merge policies together
@@ -453,8 +452,6 @@ def main():
     internet_sg_id = args.internet_sg_id
     global anywhere_sg_id
     anywhere_sg_id = args.anywhere_sg_id
-    global any_webgroup_id
-    any_webgroup_id = args.any_webgroup_id
     # could add range delimited by : eg. 80:81
     global default_web_port_ranges
     default_web_port_ranges = args.default_web_port_ranges
@@ -523,6 +520,7 @@ def main():
         full_policy_list = pd.concat([l4_dcf_policies_df, internet_rules_df,catch_all_rules_df])
     else:
         full_policy_list = pd.concat([internet_rules_df,catch_all_rules_df])
+    full_policy_list.to_csv('{}/full_policy_list.csv'.format(output_path))
     full_policy_list['exclude_sg_orchestration'] = True
     full_policy_dict = full_policy_list.to_dict(orient='records')
     full_policy_dict = {'resource': {'aviatrix_distributed_firewalling_policy_list': {
@@ -554,7 +552,6 @@ provider "aviatrix" {
 LOGLEVEL = ""
 internet_sg_id = ""
 anywhere_sg_id = ""
-any_webgroup_id = ""
 default_web_port_ranges = ""
 global_catch_all_action = ""
 config_path = ""

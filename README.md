@@ -30,7 +30,6 @@ options:
 ```
 ❯ python3 translator.py --help                 
 usage: translator.py [-h] [--loglevel {DEBUG,INFO,WARNING,ERROR,CRITICAL}] [--internet-sg-id INTERNET_SG_ID]
-                     [--anywhere-sg-id ANYWHERE_SG_ID] --any-webgroup-id ANY_WEBGROUP_ID
                      [--default-web-port-ranges DEFAULT_WEB_PORT_RANGES [DEFAULT_WEB_PORT_RANGES ...]]
                      [--global-catch-all-action {PERMIT,DENY}] [--config-path CONFIG_PATH] [--output-path OUTPUT_PATH]
                      [--debug-path DEBUG_PATH]
@@ -45,8 +44,6 @@ options:
                         Internet security group ID.
   --anywhere-sg-id ANYWHERE_SG_ID
                         Anywhere security group ID.
-  --any-webgroup-id ANY_WEBGROUP_ID
-                        Any webgroup ID.
   --default-web-port-ranges DEFAULT_WEB_PORT_RANGES [DEFAULT_WEB_PORT_RANGES ...]
                         Default web port ranges. Can provide multiple, space separated. Can provide a range by comma-delimiting.
   --global-catch-all-action {PERMIT,DENY}
