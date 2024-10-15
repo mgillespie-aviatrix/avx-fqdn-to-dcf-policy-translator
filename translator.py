@@ -190,7 +190,7 @@ def build_webgroup_df(fqdn_tag_rule_df):
         'port': '443',
         'selector': {
             'match_expressions': [{
-                'snifilter': '*.*'
+                'snifilter': '*'
             }
             ]
         }
