@@ -331,12 +331,21 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     # Build policy for egress VPCs that have discovery enabled.  This renders as 2 policies.  One policy with the "any" webgroup for port 80 and 443.  Another policy below for "any" protocol without a webgroup.
     egress_vpcs_with_discovery = egress_vpcs[(
         egress_vpcs['fqdn_tags'].astype(str).str.contains('-discovery'))]
-    discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
+    
+    #We need to be careful not to create a firewall rule with an empty source smart group.
+    if not egress_vpcs_with_discovery.empty:
+        discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
                                            'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${aviatrix_web_group.any-domain.id}']}])
-    discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
+       
+        discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
                                            'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Discovery-L4', 'port_ranges':None, 'web_groups': None}])
-    # Merge policies together
-    internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies])
+    
+        # Merge policies together
+        internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies])
+    else:
+        #Merge policies together, omitting the l4,l7 discovery items
+        internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,nat_only_policies])
+    
     internet_egress_policies = internet_egress_policies.reset_index(drop=True)
     internet_egress_policies.index = internet_egress_policies.index + 1000
     internet_egress_policies['priority'] = internet_egress_policies.index
