@@ -183,7 +183,7 @@ def build_webgroup_df(fqdn_tag_rule_df):
     fqdn_tag_rule_df['selector'] = fqdn_tag_rule_df['fqdn'].apply(
         translate_fqdn_tag_to_sg_selector)
     # add any-domain webgroup for discovery
-    fqdn_tag_rule_df = fqdn_tag_rule_df.append({'name': 'any-domain', 'protocol':'tcp','port':'443','selector': {'match_expressions': {'snifilter': '*.*'}}}, ignore_index=True)
+    fqdn_tag_rule_df = pd.concat([fqdn_tag_rule_df, pd.DataFrame({'name': 'any-domain', 'protocol':'tcp','port':'443','selector': {'match_expressions': {'snifilter': '*.*'}}})], ignore_index=True)
     return fqdn_tag_rule_df
 
 
