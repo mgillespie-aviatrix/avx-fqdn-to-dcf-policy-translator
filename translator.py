@@ -196,6 +196,7 @@ def build_webgroup_df(fqdn_tag_rule_df):
         }
     }])
     fqdn_tag_rule_df = pd.concat([fqdn_tag_rule_df, any_domain_webgroup_df], ignore_index=True)
+    fqdn_tag_rule_df = remove_invalid_name_chars(fqdn_tag_rule_df , "name")
     return fqdn_tag_rule_df
 
 
@@ -326,25 +327,33 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     # Build policy for egress VPCs that only have NAT and no fqdn tags.  This renders as a single policy.  Src VPCs, Dst Internet, Port/Protocol Any.
     egress_vpcs_with_nat_only = egress_vpcs[(
         egress_vpcs['fqdn_tags'].astype(str) == '[]')]
+
     nat_only_policies = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_nat_only['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
                                        'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Allow-All', 'port_ranges':None, 'web_groups': None}])
     # Build policy for egress VPCs that have discovery enabled.  This renders as 2 policies.  One policy with the "any" webgroup for port 80 and 443.  Another policy below for "any" protocol without a webgroup.
     egress_vpcs_with_discovery = egress_vpcs[(
         egress_vpcs['fqdn_tags'].astype(str).str.contains('-discovery'))]
     
-    #We need to be careful not to create a firewall rule with an empty source smart group.
-    if not egress_vpcs_with_discovery.empty:
-        discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
+    
+    discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
                                            'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${aviatrix_web_group.any-domain.id}']}])
        
-        discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
+    discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
                                            'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Discovery-L4', 'port_ranges':None, 'web_groups': None}])
     
-        # Merge policies together
-        internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies])
-    else:
-        #Merge policies together, omitting the l4,l7 discovery items
-        internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,nat_only_policies])
+    # Merge policies together, skipping any empty data frames.
+    internet_egress_policies = pd.DataFrame()
+    for data_frame in [fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies]:
+
+        #if list(data_frame["src_smart_groups"]) == [[]]:
+        #    continue
+
+        internet_egress_policies = pd.concat([internet_egress_policies, data_frame])
+
+    #internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies])
+    
+    #Merge policies together, omitting the l4,l7 discovery items
+    #internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,nat_only_policies])
     
     internet_egress_policies = internet_egress_policies.reset_index(drop=True)
     internet_egress_policies.index = internet_egress_policies.index + 1000
