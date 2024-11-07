@@ -127,8 +127,21 @@ def build_smartgroup_df(fw_policy_df, fw_tag_df, gateways_df):
     #Drop rows where vpc_type is avx-edge-vpc, these are Edge Sites.
     vpcs.drop(vpcs[vpcs['vpc_type'] == "avx-edge-vpc"].index, inplace=True)
     
-
-    vpcs['vpc_name_attr'] = vpcs['vpc_id'].str.split('~~').str[1]
+    #Handle the vpc name delimiter per CSP (AWS, Azure, GCP)
+    vpcs['vpc_name_attr'] = np.where(
+        vpcs['vpc_id'].str.contains('~~'),
+        vpcs['vpc_id'].str.split('~~').str[1],
+        np.where(
+            vpcs['vpc_id'].str.contains('~-~'),
+            vpcs['vpc_id'].str.split('~-~').str[0],
+            np.where(
+                vpcs['vpc_id'].str.contains(':'),
+                vpcs['vpc_id'].str.split(':').str[0],
+                vpcs["vpc_id"]
+            )
+        )
+    )
+    
     vpcs['selector'] = vpcs.apply(lambda row: {'match_expressions': {"name": row['vpc_name_attr'],
                                                 "region": row['vpc_region'],
                                                 "account_name": row['account_name'],
