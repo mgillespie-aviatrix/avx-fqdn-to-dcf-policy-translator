@@ -123,10 +123,7 @@ def build_smartgroup_df(fw_policy_df, fw_tag_df, gateways_df):
         sg_dfs.append(cidr_sg_df)
     # process VPC SmartGroups
     vpcs = gateways_df.drop_duplicates(subset=['vpc_id', 'vpc_region', 'account_name']).copy()
-
-    #Drop rows where vpc_type is avx-edge-vpc, these are Edge Sites.
-    vpcs.drop(vpcs[vpcs['vpc_type'] == "avx-edge-vpc"].index, inplace=True)
-    
+   
     #Handle the vpc name delimiter per CSP (AWS, Azure, GCP)
     vpcs['vpc_name_attr'] = np.where(
         vpcs['vpc_id'].str.contains('~~'),
@@ -141,12 +138,13 @@ def build_smartgroup_df(fw_policy_df, fw_tag_df, gateways_df):
             )
         )
     )
-    
+
     vpcs['selector'] = vpcs.apply(lambda row: {'match_expressions': {"name": row['vpc_name_attr'],
                                                 "region": row['vpc_region'],
                                                 "account_name": row['account_name'],
                                                 "type": "vpc"}}, axis=1)
     vpcs = vpcs.rename(columns={'vpc_id': 'name'})
+
     # clean
     vpcs = vpcs[['name', 'selector']]
     sg_dfs.append(vpcs)
@@ -164,6 +162,8 @@ def remove_invalid_name_chars(df, column):
     df[column] = df[column].str.replace(" ", "_", regex=False)
     df[column] = df[column].str.replace("/", "-", regex=False)
     df[column] = df[column].str.replace(".", "_", regex=False)
+    #Commonly seen in Azure strings:
+    df[column] = df[column].str.replace(":", "_", regex=False)
     return df
 
 # - [x] Create CIDR SmartGroups for each of the stateful firewall tags - named as the name of the tag
