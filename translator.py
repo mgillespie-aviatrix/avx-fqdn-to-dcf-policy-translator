@@ -352,13 +352,19 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     egress_vpcs_with_discovery = egress_vpcs[(
         egress_vpcs['fqdn_tags'].astype(str).str.contains('-discovery'))]
     
-    
-    discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
-                                           'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${aviatrix_web_group.any-domain.id}']}])
-       
-    discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
-                                           'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Discovery-L4', 'port_ranges':None, 'web_groups': None}])
-    
+    #If Discovery is disabled, this is unnecessary:
+    if not egress_vpcs_with_discovery.empty:
+        discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
+                                            'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${aviatrix_web_group.any-domain.id}']}])
+        
+        discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
+                                            'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Discovery-L4', 'port_ranges':None, 'web_groups': None}])
+    else:
+        discovery_policies_l4 = pd.DataFrame()
+        discovery_policies_l7 = pd.DataFrame()    
+
+
+
     # Merge policies together, skipping any empty data frames.
     internet_egress_policies = pd.DataFrame()
     for data_frame in [fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies]:
