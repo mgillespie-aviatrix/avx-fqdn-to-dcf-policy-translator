@@ -124,27 +124,17 @@ def build_smartgroup_df(fw_policy_df, fw_tag_df, gateways_df):
     # process VPC SmartGroups
     vpcs = gateways_df.drop_duplicates(subset=['vpc_id', 'vpc_region', 'account_name']).copy()
    
-    #Handle the vpc name delimiter per CSP (AWS, Azure, GCP)
-    vpcs['vpc_name_attr'] = np.where(
-        vpcs['vpc_id'].str.contains('~~'),
-        vpcs['vpc_id'].str.split('~~').str[1],
-        np.where(
-            vpcs['vpc_id'].str.contains('~-~'),
-            vpcs['vpc_id'].str.split('~-~').str[0],
-            np.where(
-                vpcs['vpc_id'].str.contains(':'),
-                vpcs['vpc_id'].str.split(':').str[0],
-                vpcs["vpc_id"]
-            )
-        )
-    )
+    #Ensure we have a clean smart group name.
+    vpcs['vpc_name_attr']  = pretty_parse_vpc_name(vpcs, "vpc_id")
 
     vpcs['selector'] = vpcs.apply(lambda row: {'match_expressions': {"name": row['vpc_name_attr'],
                                                 "region": row['vpc_region'],
                                                 "account_name": row['account_name'],
                                                 "type": "vpc"}}, axis=1)
-    vpcs = vpcs.rename(columns={'vpc_id': 'name'})
-
+    
+    #Make the smart group name prettier
+    vpcs = vpcs.rename(columns={'vpc_name_attr': 'name'})
+  
     # clean
     vpcs = vpcs[['name', 'selector']]
     sg_dfs.append(vpcs)
@@ -165,6 +155,22 @@ def remove_invalid_name_chars(df, column):
     #Commonly seen in Azure strings:
     df[column] = df[column].str.replace(":", "_", regex=False)
     return df
+
+# Delimit VPC name based on CSP format (~~ for AWS, ~-~ for GCP, : for Azure)
+def pretty_parse_vpc_name(df, column):
+    return np.where(
+        df[column].str.contains('~~'),
+        df[column].str.split('~~').str[1],
+        np.where(
+            df[column].str.contains('~-~'),
+            df[column].str.split('~-~').str[0],
+            np.where(
+                df[column].str.contains(':'),
+                df[column].str.split(':').str[0],
+                df[column]
+            )
+        )
+    )
 
 # - [x] Create CIDR SmartGroups for each of the stateful firewall tags - named as the name of the tag
 def translate_fw_tag_to_sg_selector(tag_cidrs):
@@ -294,7 +300,12 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     egress_vpcs = egress_vpcs[[
         'fqdn_tags', 'stateful_fw', 'egress_control', 'vpc_name', 'vpc_id']]
     egress_vpcs['src_smart_groups'] = egress_vpcs['vpc_id']
+
+    #Ensure we have a clean smart group name.
+    egress_vpcs['src_smart_groups'] = pretty_parse_vpc_name(egress_vpcs, "src_smart_groups")
+ 
     egress_vpcs = remove_invalid_name_chars(egress_vpcs, "src_smart_groups")
+
     egress_vpcs['src_smart_groups'] = egress_vpcs['src_smart_groups'].apply(
         lambda x: '${{aviatrix_smart_group.{}.id}}'.format(x))
     # Clean up disabled tag references - identify disabled tag names
@@ -401,7 +412,13 @@ def build_catch_all_policies(gateways_df,firewall_df):
     vpcs_and_fw['base_policy']=vpcs_and_fw['base_policy'].fillna('unknown')
     # Prep Smartgroup column naming
     vpcs_and_fw['smart_groups']=vpcs_and_fw['vpc_id']
-    vpcs_and_fw = remove_invalid_name_chars(vpcs_and_fw, "smart_groups")
+
+    #Ensure we have a clean smart group name.
+    vpcs_and_fw['smart_groups'] = pretty_parse_vpc_name(vpcs_and_fw, "smart_groups")
+    vpcs_and_fw = remove_invalid_name_chars(vpcs_and_fw, "smart_groups") #MG - FOCUS HERE
+
+
+
     vpcs_and_fw['smart_groups'] = vpcs_and_fw['smart_groups'].apply(
         lambda x: '${{aviatrix_smart_group.{}.id}}'.format(x))
     vpcs_and_fw = vpcs_and_fw.groupby(['base_policy'])[
@@ -438,6 +455,7 @@ def build_catch_all_policies(gateways_df,firewall_df):
     # Create Unknown Rules (VPCs that didn't have an explicit Stateful FW default action)
     unknown_pols = vpcs_and_fw[vpcs_and_fw['base_policy']=='unknown']
     unknown_src_pols = unknown_pols.copy()
+
     unknown_dst_pols = unknown_pols.copy()
     if len(unknown_pols) > 0:
         unknown_src_pols['name'] = "CATCH_ALL_LEGACY_UNKNOWN_VPCS"
@@ -447,6 +465,7 @@ def build_catch_all_policies(gateways_df,firewall_df):
         unknown_dst_pols['src_smart_groups'] = anywhere_sg_id
         unknown_dst_pols['src_smart_groups']=unknown_dst_pols['src_smart_groups'].apply(lambda x: [x])
 
+    
     # Create Global Catch All
     global_catch_all = pd.DataFrame([{'src_smart_groups': [anywhere_sg_id], 'dst_smart_groups':[anywhere_sg_id],
                                        'action':global_catch_all_action, 'logging':False, 'protocol':'ANY', 'name':'GLOBAL_CATCH_ALL', 'port_ranges':None, 'web_groups': None}])
