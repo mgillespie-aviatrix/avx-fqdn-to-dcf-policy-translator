@@ -123,12 +123,18 @@ def build_smartgroup_df(fw_policy_df, fw_tag_df, gateways_df):
         sg_dfs.append(cidr_sg_df)
     # process VPC SmartGroups
     vpcs = gateways_df.drop_duplicates(subset=['vpc_id', 'vpc_region', 'account_name']).copy()
-    vpcs['vpc_name_attr'] = vpcs['vpc_id'].str.split('~~').str[1]
+   
+    #Ensure we have a clean smart group name.
+    vpcs['vpc_name_attr']  = pretty_parse_vpc_name(vpcs, "vpc_id")
+
     vpcs['selector'] = vpcs.apply(lambda row: {'match_expressions': {"name": row['vpc_name_attr'],
                                                 "region": row['vpc_region'],
                                                 "account_name": row['account_name'],
                                                 "type": "vpc"}}, axis=1)
-    vpcs = vpcs.rename(columns={'vpc_id': 'name'})
+    
+    #Make the smart group name prettier
+    vpcs = vpcs.rename(columns={'vpc_name_attr': 'name'})
+  
     # clean
     vpcs = vpcs[['name', 'selector']]
     sg_dfs.append(vpcs)
@@ -146,7 +152,25 @@ def remove_invalid_name_chars(df, column):
     df[column] = df[column].str.replace(" ", "_", regex=False)
     df[column] = df[column].str.replace("/", "-", regex=False)
     df[column] = df[column].str.replace(".", "_", regex=False)
+    #Commonly seen in Azure strings:
+    df[column] = df[column].str.replace(":", "_", regex=False)
     return df
+
+# Delimit VPC name based on CSP format (~~ for AWS, ~-~ for GCP, : for Azure)
+def pretty_parse_vpc_name(df, column):
+    return np.where(
+        df[column].str.contains('~~'),
+        df[column].str.split('~~').str[1],
+        np.where(
+            df[column].str.contains('~-~'),
+            df[column].str.split('~-~').str[0],
+            np.where(
+                df[column].str.contains(':'),
+                df[column].str.split(':').str[0],
+                df[column]
+            )
+        )
+    )
 
 # - [x] Create CIDR SmartGroups for each of the stateful firewall tags - named as the name of the tag
 def translate_fw_tag_to_sg_selector(tag_cidrs):
@@ -183,7 +207,20 @@ def build_webgroup_df(fqdn_tag_rule_df):
     fqdn_tag_rule_df['selector'] = fqdn_tag_rule_df['fqdn'].apply(
         translate_fqdn_tag_to_sg_selector)
     # add any-domain webgroup for discovery
-    fqdn_tag_rule_df = fqdn_tag_rule_df.append({'name': 'any-domain', 'protocol':'tcp','port':'443','selector': {'match_expressions': {'snifilter': '*.*'}}}, ignore_index=True)
+
+    any_domain_webgroup_df = pd.DataFrame([{
+        'name': 'any-domain',
+        'protocol': 'tcp',
+        'port': '443',
+        'selector': {
+            'match_expressions': [{
+                'snifilter': '*'
+            }
+            ]
+        }
+    }])
+    fqdn_tag_rule_df = pd.concat([fqdn_tag_rule_df, any_domain_webgroup_df], ignore_index=True)
+    fqdn_tag_rule_df = remove_invalid_name_chars(fqdn_tag_rule_df , "name")
     return fqdn_tag_rule_df
 
 
@@ -263,7 +300,12 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     egress_vpcs = egress_vpcs[[
         'fqdn_tags', 'stateful_fw', 'egress_control', 'vpc_name', 'vpc_id']]
     egress_vpcs['src_smart_groups'] = egress_vpcs['vpc_id']
+
+    #Ensure we have a clean smart group name.
+    egress_vpcs['src_smart_groups'] = pretty_parse_vpc_name(egress_vpcs, "src_smart_groups")
+ 
     egress_vpcs = remove_invalid_name_chars(egress_vpcs, "src_smart_groups")
+
     egress_vpcs['src_smart_groups'] = egress_vpcs['src_smart_groups'].apply(
         lambda x: '${{aviatrix_smart_group.{}.id}}'.format(x))
     # Clean up disabled tag references - identify disabled tag names
@@ -314,17 +356,40 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     # Build policy for egress VPCs that only have NAT and no fqdn tags.  This renders as a single policy.  Src VPCs, Dst Internet, Port/Protocol Any.
     egress_vpcs_with_nat_only = egress_vpcs[(
         egress_vpcs['fqdn_tags'].astype(str) == '[]')]
+
     nat_only_policies = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_nat_only['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
                                        'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Allow-All', 'port_ranges':None, 'web_groups': None}])
     # Build policy for egress VPCs that have discovery enabled.  This renders as 2 policies.  One policy with the "any" webgroup for port 80 and 443.  Another policy below for "any" protocol without a webgroup.
     egress_vpcs_with_discovery = egress_vpcs[(
         egress_vpcs['fqdn_tags'].astype(str).str.contains('-discovery'))]
-    discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
-                                           'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${aviatrix_web_group.any-domain.id}']}])
-    discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
-                                           'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Discovery-L4', 'port_ranges':None, 'web_groups': None}])
-    # Merge policies together
-    internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies])
+    
+    #If Discovery is disabled, this is unnecessary:
+    if not egress_vpcs_with_discovery.empty:
+        discovery_policies_l7 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
+                                            'action':'PERMIT', 'logging':True, 'protocol':'TCP', 'name':'Egress-Discovery-L7', 'port_ranges':translate_port_to_port_range(default_web_port_ranges), 'web_groups': ['${aviatrix_web_group.any-domain.id}']}])
+        
+        discovery_policies_l4 = pd.DataFrame([{'src_smart_groups': list(egress_vpcs_with_discovery['src_smart_groups']), 'dst_smart_groups':[internet_sg_id],
+                                            'action':'PERMIT', 'logging':True, 'protocol':'ANY', 'name':'Egress-Discovery-L4', 'port_ranges':None, 'web_groups': None}])
+    else:
+        discovery_policies_l4 = pd.DataFrame()
+        discovery_policies_l7 = pd.DataFrame()    
+
+
+
+    # Merge policies together, skipping any empty data frames.
+    internet_egress_policies = pd.DataFrame()
+    for data_frame in [fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies]:
+
+        #if list(data_frame["src_smart_groups"]) == [[]]:
+        #    continue
+
+        internet_egress_policies = pd.concat([internet_egress_policies, data_frame])
+
+    #internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,discovery_policies_l7,discovery_policies_l4,nat_only_policies])
+    
+    #Merge policies together, omitting the l4,l7 discovery items
+    #internet_egress_policies = pd.concat([fqdn_tag_policies,fqdn_tag_default_policies,nat_only_policies])
+    
     internet_egress_policies = internet_egress_policies.reset_index(drop=True)
     internet_egress_policies.index = internet_egress_policies.index + 1000
     internet_egress_policies['priority'] = internet_egress_policies.index
@@ -347,7 +412,13 @@ def build_catch_all_policies(gateways_df,firewall_df):
     vpcs_and_fw['base_policy']=vpcs_and_fw['base_policy'].fillna('unknown')
     # Prep Smartgroup column naming
     vpcs_and_fw['smart_groups']=vpcs_and_fw['vpc_id']
-    vpcs_and_fw = remove_invalid_name_chars(vpcs_and_fw, "smart_groups")
+
+    #Ensure we have a clean smart group name.
+    vpcs_and_fw['smart_groups'] = pretty_parse_vpc_name(vpcs_and_fw, "smart_groups")
+    vpcs_and_fw = remove_invalid_name_chars(vpcs_and_fw, "smart_groups") #MG - FOCUS HERE
+
+
+
     vpcs_and_fw['smart_groups'] = vpcs_and_fw['smart_groups'].apply(
         lambda x: '${{aviatrix_smart_group.{}.id}}'.format(x))
     vpcs_and_fw = vpcs_and_fw.groupby(['base_policy'])[
@@ -384,6 +455,7 @@ def build_catch_all_policies(gateways_df,firewall_df):
     # Create Unknown Rules (VPCs that didn't have an explicit Stateful FW default action)
     unknown_pols = vpcs_and_fw[vpcs_and_fw['base_policy']=='unknown']
     unknown_src_pols = unknown_pols.copy()
+
     unknown_dst_pols = unknown_pols.copy()
     if len(unknown_pols) > 0:
         unknown_src_pols['name'] = "CATCH_ALL_LEGACY_UNKNOWN_VPCS"
@@ -393,6 +465,7 @@ def build_catch_all_policies(gateways_df,firewall_df):
         unknown_dst_pols['src_smart_groups'] = anywhere_sg_id
         unknown_dst_pols['src_smart_groups']=unknown_dst_pols['src_smart_groups'].apply(lambda x: [x])
 
+    
     # Create Global Catch All
     global_catch_all = pd.DataFrame([{'src_smart_groups': [anywhere_sg_id], 'dst_smart_groups':[anywhere_sg_id],
                                        'action':global_catch_all_action, 'logging':False, 'protocol':'ANY', 'name':'GLOBAL_CATCH_ALL', 'port_ranges':None, 'web_groups': None}])
