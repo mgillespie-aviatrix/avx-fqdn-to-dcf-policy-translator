@@ -1,7 +1,7 @@
+#Note - package hcl will interfere with pyhcl. If hcl is installed, remove it and reinstall pyhcl with the --force option
 certifi==2024.8.30
 charset-normalizer==3.4.0
 h5py==3.12.1
-hcl==0.2.1
 idna==3.10
 numpy==2.1.2
 pandas==2.2.3
