@@ -576,14 +576,19 @@ def main():
             json.dump(l4_policies_dict, json_file, indent=1)
 
     # Create Webgroups
-    fqdn_tag_rule_df = eval_unsupported_webgroups(fqdn_tag_rule_df,fqdn_df)
-    if LOGLEVEL == "DEBUG":
-        fqdn_tag_rule_df.to_csv('{}/clean_fqdn.csv'.format(debug_path))
-    webgroups_df = build_webgroup_df(fqdn_tag_rule_df)
-    export_dataframe_to_tf(webgroups_df[['name','selector']], 'aviatrix_web_group', 'name')
+    if not (fqdn_tag_rule_df.empty or fqdn_df.empty):
+        fqdn_tag_rule_df = eval_unsupported_webgroups(fqdn_tag_rule_df,fqdn_df)
+        if LOGLEVEL == "DEBUG":
+            fqdn_tag_rule_df.to_csv('{}/clean_fqdn.csv'.format(debug_path))
+        webgroups_df = build_webgroup_df(fqdn_tag_rule_df)
+        export_dataframe_to_tf(webgroups_df[['name','selector']], 'aviatrix_web_group', 'name')
 
-    # Create Internet policies
-    internet_rules_df = build_internet_policies(gateways_df, fqdn_df, webgroups_df)
+        # Create Internet policies
+        internet_rules_df = build_internet_policies(gateways_df, fqdn_df, webgroups_df)
+    else:
+        #Create empty dataframes 
+        internet_rules_df = pd.DataFrame() 
+        webgroups_df = pd.DataFrame()
 
     # Create Default Policies
     catch_all_rules_df = build_catch_all_policies(gateways_df, fw_gw_df)
