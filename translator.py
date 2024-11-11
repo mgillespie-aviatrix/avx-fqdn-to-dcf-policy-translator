@@ -348,7 +348,7 @@ def build_internet_policies(gateways_df, fqdn_df, webgroups_df):
     fqdn_tag_default_policies['port_ranges']=None
     fqdn_tag_default_policies['web_groups']=None
     fqdn_tag_default_policies['action']=fqdn_tag_default_policies['fqdn_mode'].apply(
-        lambda x: 'DENY' if x == 'white' else 'ALLOW')
+        lambda x: 'DENY' if x == 'white' else 'PERMIT')
     fqdn_tag_default_policies['name'] = fqdn_tag_default_policies['fqdn_mode'].apply(
         lambda x: 'Egress-AllowList-Default' if x == 'white' else 'Egress-DenyList-Default')
     fqdn_tag_default_policies = fqdn_tag_default_policies.drop(columns='fqdn_mode')
